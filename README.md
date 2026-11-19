@@ -2,6 +2,14 @@
 
 把 KaTrain / KataGo 的分析数据（每手目差、最佳下一手、AI 后续变化）转成「问题手」卡片，用 Anki 式间隔重复来练。纯 JavaScript 单页应用 + 一个极小的本地 Node 服务，所有分析都在本机完成，不依赖云端。
 
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/1932bfce-2af0-4000-bbb7-cc92f20bac35" />
+
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/299f01b1-920b-44c5-bd3a-5edd224a5636" />
+
+
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/20015610-60cf-40e3-8c88-7c2ae19c0a9a" />
+
+
 ## 快速开始
 
 环境：Windows、Node.js 18+、Python 3（仅首次解包用）；`E:\Katrain\KaTrain.exe` 与同目录的 `.bin.gz` 模型。
