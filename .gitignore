@@ -1,0 +1,13 @@
+# 工具自身生成物（若把 go-review 单独作为仓库，这份同样生效）
+engine/
+cache/
+sgfout/
+tools/shots/
+*.part*.sgf
+*.tmp
+
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
