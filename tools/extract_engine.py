@@ -1,7 +1,25 @@
 """Extract the bundled KataGo engine + analysis config from KaTrain.exe (PyInstaller CArchive)."""
 import struct, os, sys, zlib
-SRC = os.environ.get("KATRAIN_EXE", r"E:/Katrain/KaTrain.exe")
+
+def find_katrain_exe():
+    if os.environ.get("KATRAIN_EXE"):
+        return os.environ["KATRAIN_EXE"]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = [
+        os.environ.get("KATRAIN_DIR"),
+        "E:/Katrain",
+        os.path.join(root, "..", "Katrain"),
+        os.path.join(root, ".."),
+    ]
+    for d in candidates:
+        if d and os.path.isfile(os.path.join(d, "KaTrain.exe")):
+            return os.path.join(d, "KaTrain.exe")
+    return "E:/Katrain/KaTrain.exe"
+
+SRC = find_katrain_exe()
 OUT = os.environ.get("ENGINE_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
+if not os.path.isfile(SRC):
+    sys.exit("KaTrain.exe not found: %s\nSet KATRAIN_EXE (full path) or KATRAIN_DIR (install folder)." % SRC)
 size = os.path.getsize(SRC)
 with open(SRC, "rb") as f:
     f.seek(size - 8192); tail = f.read()

@@ -103,16 +103,27 @@
     this.hoverColor = 'B'; // ghost stone colour
     this.hoverEnabled = true;
     this.onClick = null;
+    this.onOccupiedClick = null; // optional feedback when clicking an occupied point
+    this.ignoreOccupied = true;  // occupied intersections are not legal moves: never report a mistake
     this.interactive = true;
     var self = this;
     canvas.addEventListener('click', function (ev) {
       if (!self.interactive || !self.onClick) return;
       var p = self.eventToPoint(ev);
-      if (p) {
-        self.hover = null;
-        self.onClick(p.x, p.y, SGF.xyToGtp(p.x, p.y, self.size));
+      if (!p) return;
+      var occupied = self.pos && self.pos.board[p.y * self.size + p.x] !== 0;
+      if (occupied && self.ignoreOccupied) {
+        // A stone is already here, so the point cannot be played at all.
+        // Keep the red hover square visible and do NOT forward the click to
+        // the app (no mistake count, no hint state change, no progress change).
+        self.hover = { x: p.x, y: p.y };
         self.render();
+        if (self.onOccupiedClick) self.onOccupiedClick(p.x, p.y, SGF.xyToGtp(p.x, p.y, self.size));
+        return;
       }
+      self.hover = null;
+      self.onClick(p.x, p.y, SGF.xyToGtp(p.x, p.y, self.size));
+      self.render();
     });
     canvas.addEventListener('mousemove', function (ev) {
       if (!self.interactive || !self.hoverEnabled) {

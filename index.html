@@ -23,6 +23,7 @@
     <div class="stat"><b id="statToday">0</b><span>今日已练</span></div>
   </div>
   <div class="top-actions">
+    <button id="btnMemoJump" class="btn ghost">名局背谱</button>
     <button id="btnHelp" class="btn ghost">使用说明</button>
     <button id="btnBackup" class="btn ghost">导出备份</button>
     <button id="btnRestore" class="btn ghost">导入备份</button>
@@ -54,6 +55,15 @@
       <li>评级驱动 Anki 式间隔重复；到期卡片重新进入队列。复习中随时可「删除此卡」，删除后不再出现。</li>
       <li>数据保存在浏览器 localStorage，可用「导出备份」保存 JSON。</li>
     </ol>
+
+    <h3>四、名局背谱（与 SRS 完全独立）</h3>
+    <ol>
+      <li>在左侧「名局背谱」里，从已导入棋谱点「☆ 收录选中棋谱」，或直接点「从 .sgf 文件收录」选任意 SGF —— 背谱只用落子序列，<b>不需要先跑 KataGo 分析</b>。</li>
+      <li>名局单独存一份，清空已导入棋谱、改筛选阈值都不会影响它；列表里可直接改名称、写备注、删除或清除进度。</li>
+      <li>设好「我背的一方」（黑/白）与起止手数（止手填 0 = 背到终局），点该局的「开始背谱」。对手的棋由系统按原谱自动摆出，你只需依次点出所选方的每一手。</li>
+      <li>点错<b>停在当前手</b>继续试，不会重来；「提示」只在棋盘标出这一手的落点，仍需自己点，提示与点错分别计数但<b>不评级、不进 SRS</b>。原谱该手是虚着时点「本手 Pass」。</li>
+      <li>进度自动保存，下次可「继续背（第 N 手）」或「从头背」；背完给出点错/提示次数小结。</li>
+    </ol>
     <button id="btnHelpClose" class="btn primary">知道了</button>
   </div>
 </div>
@@ -78,7 +88,7 @@
           <span id="anEngine" class="pill">检测中…</span>
           <button id="btnAnalyzeRefresh" class="btn ghost an-refresh">刷新列表</button>
         </div>
-        <p class="an-note">从 <code>E:\Katrain\sgf</code> 勾选棋谱（默认只勾一局），点「开始分析」即由本机引擎逐手生成目差、最佳下一手与 AI 变化，完成后<b>自动载入</b>。需要 <code>node tools/serve.js</code> 启动页面。</p>
+        <p class="an-note">从项目 <code>sgf/</code> 目录（没有时用 KaTrain 安装目录的 <code>sgf/</code>，可用环境变量 <code>KATRAIN_DIR</code> 改）勾选棋谱（默认只勾一局），点「开始分析」即由本机引擎逐手生成目差、最佳下一手与 AI 变化，完成后<b>自动载入</b>。需要 <code>node tools/serve.js</code> 启动页面。</p>
         <div id="anFiles" class="an-files"></div>
         <div class="grid3 an-grid">
           <label class="field"><span>visits（精度）</span><input id="anVisits" type="number" min="10" max="2000" value="100"></label>
@@ -171,13 +181,45 @@
         </table>
       </div>
     </div>
+
+    <div class="card" id="memoCard">
+      <div class="card-head"><h2>名局背谱</h2><span class="tag" id="memoCount">0 局</span></div>
+      <p class="an-note">把棋谱收进名局库（<b>单独保存</b>，清空已导入棋谱也不丢）。背谱时选一方，系统按原谱自动摆出对手的每一手，你只需依次点出这一方的落子；<b>不评级、不进 SRS</b>，卡住可点提示。收录不需要 AI 分析数据。</p>
+
+      <div class="sub-title">收录名局</div>
+      <label class="field">
+        <span>从已导入棋谱选择</span>
+        <select id="memoSource"></select>
+      </label>
+      <div class="btn-row tiny">
+        <button id="btnMemoAddSelected" class="btn primary">☆ 收录选中棋谱</button>
+        <button id="btnMemoAddFiles" class="btn">从 .sgf 文件收录</button>
+        <input id="memoFileInput" type="file" accept=".sgf,.SGF" multiple hidden>
+      </div>
+
+      <div class="sub-title">我的名局</div>
+      <div id="memoList" class="memo-list"></div>
+
+      <div class="sub-title">背谱参数（点列表里的「开始背谱」时生效）</div>
+      <div class="grid3">
+        <label class="field"><span>我背的一方</span>
+          <select id="memoColor">
+            <option value="B">执黑</option>
+            <option value="W">执白</option>
+          </select>
+        </label>
+        <label class="field"><span>起手</span><input id="memoFrom" type="number" min="1" value="1"></label>
+        <label class="field"><span>止手（0 = 终局）</span><input id="memoTo" type="number" min="0" value="0"></label>
+      </div>
+      <div class="field-note">起止按原谱全局手号；区间内对手的棋仍会自动摆出。中途退出会记住进度，下次可续背。</div>
+    </div>
   </section>
 
   <!-- ============ RIGHT ============ -->
   <section class="col-right">
     <div class="card study-card">
       <div class="card-head">
-        <h2>复习</h2>
+        <h2 id="studyTitle">复习</h2>
         <span class="tag" id="queueInfo">队列 0 张</span>
       </div>
 
@@ -234,6 +276,25 @@
           <button id="btnNext" class="btn primary big">下一张</button>
           <button id="btnDelete2" class="btn ghost danger">删除此卡</button>
         </div>
+      </div>
+
+      <div id="memoPanel" class="memo-panel hidden">
+        <div id="memoInfo" class="card-info"></div>
+        <div class="board-shell"><canvas id="memoBoard"></canvas></div>
+        <div class="progress-line"><div id="memoProgressBar" class="progress-bar"></div></div>
+        <div class="practice-meta">
+          <span id="memoStep">第 1 手</span>
+          <span id="memoMistakes">点错 0 次</span>
+          <span id="memoHints">提示 0 次</span>
+        </div>
+        <div id="memoTip" class="tip-text">点击棋盘，下出这一方的下一手。</div>
+        <div class="btn-row">
+          <button id="btnMemoHint" class="btn">提示（显示落点）</button>
+          <button id="btnMemoPass" class="btn">本手 Pass</button>
+          <button id="btnMemoRestart" class="btn ghost">从头背</button>
+          <button id="btnMemoBack" class="btn ghost">返回名局库</button>
+        </div>
+        <div id="memoDone" class="memo-done hidden"></div>
       </div>
     </div>
   </section>

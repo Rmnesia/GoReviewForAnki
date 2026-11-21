@@ -26,12 +26,32 @@ const vm = require('vm');
 const { spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const KATRAIN = path.resolve(ROOT, '..');
+const MODEL_NAME = 'kata1-zhizi-b40c768nbt-s11472M-d5982M.bin.gz';
+
+// KaTrain.exe / the neural network model are external dependencies and live
+// outside the git project. KATRAIN_DIR can point at any KaTrain installation.
+// Fall back to a few well-known locations, including the original E:\Katrain.
+function findKatrainDir() {
+  const candidates = [
+    process.env.KATRAIN_DIR,
+    'E:/Katrain',
+    path.resolve(ROOT, '..', 'Katrain'),
+    path.resolve(ROOT, '..')
+  ].filter(Boolean);
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, MODEL_NAME)) || fs.existsSync(path.join(dir, 'KaTrain.exe'))) return dir;
+  }
+  return candidates[0];
+}
+const KATRAIN_DIR = findKatrainDir();
 const ENGINE_DIR = path.join(ROOT, 'engine');
 const ENGINE_EXE = path.join(ENGINE_DIR, 'katago.exe');
 const ENGINE_CFG = path.join(ENGINE_DIR, 'analysis_config.cfg');
-const MODEL = path.join(KATRAIN, 'kata1-zhizi-b40c768nbt-s11472M-d5982M.bin.gz');
-const DEFAULT_INPUT = path.join(KATRAIN, 'sgf');
+const MODEL = process.env.KATAGO_MODEL || path.join(KATRAIN_DIR, MODEL_NAME);
+// Original SGFs: prefer a local sgf/ folder inside the project (gitignored),
+// otherwise use the sgf/ folder next to KaTrain.exe.
+const DEFAULT_INPUT = fs.existsSync(path.join(ROOT, 'sgf'))
+  ? path.join(ROOT, 'sgf') : path.join(KATRAIN_DIR, 'sgf');
 const OUT_DIR = path.join(ROOT, 'sgfout');
 const CACHE_DIR = path.join(ROOT, 'cache');
 
@@ -514,7 +534,7 @@ async function main() {
 if (require.main === module) main().catch(function (e) { console.error('\n错误：' + e.message); process.exit(1); });
 
 module.exports = {
-  DEFAULTS, ROOT, ENGINE_DIR, OUT_DIR, CACHE_DIR,
+  DEFAULTS, ROOT, ENGINE_DIR, OUT_DIR, CACHE_DIR, KATRAIN_DIR, MODEL,
   parseArgs, prepare, run, collectFiles, outputName, readGame, loadCache, cachePath,
   writeSGF, makeQuery, buildEnhancedSGF, toAnalysis, encodeKT, commentFor, inferKomi
 };

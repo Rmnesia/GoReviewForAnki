@@ -4,7 +4,7 @@
  *
  * The web page can now start / watch / stop an analysis directly, without
  * running `node tools/analyze.js` in a terminal. API:
- *   GET  /api/source-games            list SGFs in E:/Katrain/sgf + cache progress
+ *   GET  /api/source-games            list source SGFs + cache progress (input = project sgf/ or KATRAIN_DIR/sgf)
  *   POST /api/analyze                 {files, visits, threads, limit, force, comments}
  *   GET  /api/analyze/status          progress / logs / outputs / error
  *   POST /api/analyze/stop            stop and keep completed plies in cache

@@ -13,12 +13,13 @@
   function num(v, dflt) { var n = parseFloat(v); return isFinite(n) ? n : dflt; }
   function int(v, dflt) { var n = parseInt(v, 10); return isFinite(n) ? n : dflt; }
 
-  var board = null, previewBoard = null;
+  var board = null, previewBoard = null, memoBoard = null;
   var problems = [], problemById = {}, gamesByKey = {};
   var sessionQueue = [];
   var practice = null;
   var lesson = null, lessonTimer = null;
-  var mode = 'idle'; // idle | review | preview | result
+  var memo = null;   // 当前背谱状态（名局背谱，独立于 SRS）
+  var mode = 'idle'; // idle | review | preview | result | memo
   var currentId = null;
   var toastTimer = null;
 
@@ -32,14 +33,25 @@
     toastTimer = setTimeout(function () { t.classList.add('hidden'); }, 2600);
   }
 
+  // An occupied intersection is not a legal move. The Board already blocks
+  // such clicks; this is a second guard in case a handler is called directly.
+  function occupiedAt(pos, x, y) {
+    return !!(pos && pos.board && pos.board[y * pos.size + x] !== 0);
+  }
+
+  function notifyOccupied() {
+    toast('这里已有棋子，点不了（不计错）');
+  }
+
   function showPanel(id) {
-    ['idlePanel', 'studyPanel', 'previewPanel', 'resultPanel'].forEach(function (p) {
+    ['idlePanel', 'studyPanel', 'previewPanel', 'resultPanel', 'memoPanel'].forEach(function (p) {
       $(p).classList.toggle('hidden', p !== id);
     });
     // canvases hidden at construct time report clientWidth 0 -> redraw once visible
     setTimeout(function () {
       if (board) board.render();
       if (previewBoard) previewBoard.render();
+      if (memoBoard) memoBoard.render();
     }, 0);
   }
 
@@ -117,6 +129,7 @@
     renderSummary();
     renderNotes(res.notes);
     renderProblemTable();
+    renderMemoSource();
     updateIdle();
   }
 
@@ -127,7 +140,10 @@
     $('statProblems').textContent = c.total;
     $('statDue').textContent = c.due + c.fresh;
     $('statToday').textContent = st.stats.day === today() ? st.stats.dayReviews : 0;
-    $('queueInfo').textContent = '待复习 ' + (c.due + c.fresh) + ' 张';
+    $('studyTitle').textContent = mode === 'memo' ? '名局背谱' : '复习';
+    $('queueInfo').textContent = mode === 'memo'
+      ? '不进 SRS · 自主练习'
+      : '待复习 ' + (c.due + c.fresh) + ' 张';
     $('problemCount').textContent = problems.length + ' 条';
   }
 
@@ -473,6 +489,7 @@
 
   function onBoardClick(x, y, gtp) {
     if (mode !== 'review' || !practice || practice.done) return;
+    if (occupiedAt(practice.pos, x, y)) { notifyOccupied(); return; }
     var exp = practice.seq.expected[practice.step];
     if (!exp) return;
     if (String(gtp).toUpperCase() === String(exp).toUpperCase()) {
@@ -650,6 +667,7 @@
 
   function onPreviewClick(x, y, gtp) {
     if (mode !== 'preview' || !lesson) return;
+    if (occupiedAt(lesson.pos, x, y)) { notifyOccupied(); return; }
     if (lessonPlay(gtp)) return;
     if (lesson.done) return;
     var exp = lesson.seq.expected[lesson.step];
@@ -698,6 +716,349 @@
     staticLessonText();
     showPanel('previewPanel');
     renderProblemTable();
+  }
+
+  /* ---------------- 名局背谱（master games，与 SRS 完全独立） ---------------- */
+
+  function renderMemoSource() {
+    var sel = $('memoSource');
+    if (!sel) return;
+    var cur = sel.value, gs = Store.get().games;
+    sel.innerHTML = gs.length
+      ? gs.map(function (g) { return '<option value="' + esc(g.filename) + '">' + esc(g.filename) + '</option>'; }).join('')
+      : '<option value="">（尚未导入棋谱，可用下方按钮直接选 .sgf 文件）</option>';
+    if (cur && gs.some(function (g) { return g.filename === cur; })) sel.value = cur;
+  }
+
+  // 名局只保存落子序列，不需要目差 / AI 变化，也不随已导入棋谱被清空。
+  function normalizeMaster(g) {
+    return {
+      id: g.filename,
+      name: String(g.filename).replace(/\.sgf$/i, ''),
+      filename: g.filename,
+      size: g.size || 19,
+      pb: g.pb || '', pw: g.pw || '',
+      blackId: g.blackId || g.pb || '', whiteId: g.whiteId || g.pw || '',
+      moves: g.moves.map(function (m) {
+        return { ply: m.ply, color: m.color, sgf: m.sgf, gtp: m.gtp };
+      }),
+      note: '', addedAt: new Date().toISOString()
+    };
+  }
+
+  async function memoAddSelected() {
+    var fn = $('memoSource').value;
+    var g = Store.get().games.filter(function (x) { return x.filename === fn; })[0];
+    if (!g) { toast('请先导入棋谱，或改点「从 .sgf 文件收录」'); return; }
+    if (!g.moves.length) { toast('该棋谱没有落子序列'); return; }
+    var m = normalizeMaster(g);
+    var r = Store.addMaster(m);
+    renderMemoList(); renderMemoSource();
+    toast(r.added ? '已收录为名局：' + m.name : '该棋谱已在名局库中，已刷新落子（保留名称与进度）');
+  }
+
+  async function memoAddFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList || []).filter(function (f) { return /\.sgf$/i.test(f.name); });
+    if (!files.length) { toast('未找到 .sgf 文件'); return; }
+    var added = 0, dup = 0, errs = [];
+    for (var i = 0; i < files.length; i++) {
+      try {
+        var g = await SGF.buildGame(await files[i].text(), files[i].name, '');
+        if (!g.moves.length) { errs.push(files[i].name + '（无落子）'); continue; }
+        var r = Store.addMaster(normalizeMaster(g));
+        if (r.added) added++; else dup++;
+      } catch (e) {
+        errs.push(files[i].name + '：' + (e && e.message || e));
+      }
+    }
+    renderMemoList(); renderMemoSource();
+    toast('收录完成：新增 ' + added + ' 局' + (dup ? '、更新 ' + dup + ' 局' : '') +
+      (errs.length ? '，失败 ' + errs.length + ' 个（' + errs[0] + '）' : ''));
+  }
+
+  function memoProgressLabel(p) {
+    if (!p) return '未开始';
+    if (p.done) return '已背完 ✓';
+    return '续背：第 ' + p.ply + ' 手';
+  }
+
+  function renderMemoList() {
+    var st = Store.get(), box = $('memoList');
+    $('memoCount').textContent = st.masters.length + ' 局';
+    if (!st.masters.length) {
+      box.innerHTML = '<div class="memo-empty">还没有名局。可从上方「☆ 收录选中棋谱」，或直接点「从 .sgf 文件收录」选任意 SGF（不需要 AI 分析数据）。</div>';
+      return;
+    }
+    box.innerHTML = st.masters.map(function (m) {
+      var p = Store.getMasterProgress(m.id);
+      var resume = p && !p.done;
+      var label = (p && p.done) ? '再背一遍' : (resume ? '继续背（第 ' + p.ply + ' 手）' : '开始背谱');
+      return '<div class="memo-item" data-id="' + esc(m.id) + '">' +
+        '<div class="memo-top">' +
+          '<input class="memo-name" data-act="name" value="' + esc(m.name) + '" title="点击可直接改名">' +
+          '<button class="btn ghost danger" data-act="del" title="从名局库删除">删除</button>' +
+        '</div>' +
+        '<div class="memo-meta">黑 ' + esc(m.blackId || '?') + ' / 白 ' + esc(m.whiteId || '?') +
+          ' · ' + m.moves.length + ' 手 · ' +
+          '<span class="pill memo">' + memoProgressLabel(p) + '</span>' +
+          (m.note ? '<br>备注：' + esc(m.note) : '') + '</div>' +
+        '<div class="memo-ops">' +
+          '<button class="btn primary" data-act="start">' + label + '</button>' +
+          (resume ? '<button class="btn" data-act="restart">从头背</button>' : '') +
+          '<button class="btn ghost" data-act="note">备注</button>' +
+          (p ? '<button class="btn ghost" data-act="clear">清除进度</button>' : '') +
+        '</div></div>';
+    }).join('');
+
+    Array.prototype.forEach.call(box.querySelectorAll('.memo-item'), function (item) {
+      var id = item.getAttribute('data-id');
+      var nameInput = item.querySelector('[data-act=name]');
+      nameInput.addEventListener('change', function () {
+        var v = nameInput.value.trim();
+        Store.updateMaster(id, { name: v || '未命名名局' });
+        renderMemoList(); toast('名称已保存');
+      });
+      Array.prototype.forEach.call(item.querySelectorAll('button[data-act]'), function (b) {
+        b.addEventListener('click', function () {
+          var act = b.getAttribute('data-act');
+          var m = Store.get().masters.filter(function (x) { return x.id === id; })[0];
+          if (!m) return;
+          if (act === 'del') {
+            if (!confirm('从名局库删除「' + m.name + '」？该局背谱进度也会一并清除。')) return;
+            Store.removeMaster(id);
+            if (memo && memo.master.id === id) { memo = null; backFromMemo(); }
+            else renderMemoList();
+            toast('已删除该名局');
+          } else if (act === 'start') {
+            var pg = Store.getMasterProgress(id);
+            startMemo(id, !!(pg && pg.done));
+          } else if (act === 'restart') {
+            startMemo(id, true);
+          } else if (act === 'note') {
+            var v = prompt('给「' + m.name + '」写个备注（可留空）：', m.note || '');
+            if (v !== null) { Store.updateMaster(id, { note: v.trim() }); renderMemoList(); }
+          } else if (act === 'clear') {
+            Store.clearMasterProgress(id); renderMemoList(); toast('已清除该局背谱进度');
+          }
+        });
+      });
+    });
+  }
+
+  function memoParams() {
+    return {
+      color: $('memoColor').value === 'W' ? 'W' : 'B',
+      from: Math.max(1, int($('memoFrom').value, 1)),
+      to: Math.max(0, int($('memoTo').value, 0))
+    };
+  }
+
+  function memoMoveAt(ply) { return memo ? (memo.master.moves[ply - 1] || null) : null; }
+
+  function currentMemoIsPass() {
+    if (!memo || memo.done) return false;
+    var mv = memoMoveAt(memo.ply);
+    return !!(mv && mv.color === memo.color && SGF.isPassGtp(mv.gtp));
+  }
+
+  function saveMemoProgress() {
+    if (!memo) return;
+    Store.setMasterProgress(memo.master.id, {
+      color: memo.color, from: memo.from, to: memo.to,
+      ply: memo.ply, mistakes: memo.mistakes, hints: memo.hints,
+      done: !!memo.done, updatedAt: new Date().toISOString()
+    });
+  }
+
+  function renderMemo(msg, kind) {
+    if (!memo) return;
+    var span = Math.max(1, memo.to - memo.from + 1);
+    var doneCnt = Math.max(0, Math.min(span, memo.ply - memo.from));
+    $('memoProgressBar').style.width = Math.round(doneCnt / span * 100) + '%';
+    $('memoInfo').innerHTML =
+      '<span class="cname" title="' + esc(memo.master.name) + '">' + esc(memo.master.name) + '</span>' +
+      '<span>第 <b>' + Math.min(memo.ply, memo.to) + '</b> / ' + memo.to + ' 手</span>' +
+      '<span>执 <b>' + (memo.color === 'B' ? '黑' : '白') + '</b> 背谱</span>' +
+      '<span class="badge">区间 ' + memo.from + '–' + memo.to + '</span>' +
+      '<span class="badge">全谱 ' + memo.N + ' 手</span>' +
+      '<span>黑 <b>' + esc(memo.master.blackId || '?') + '</b></span>' +
+      '<span>白 <b>' + esc(memo.master.whiteId || '?') + '</b></span>';
+    $('memoStep').textContent = memo.done ? '已背完' : ('第 ' + memo.ply + ' 手');
+    $('memoMistakes').textContent = '点错 ' + memo.mistakes + ' 次';
+    $('memoHints').textContent = '提示 ' + memo.hints + ' 次';
+    var tip = $('memoTip');
+    tip.textContent = msg;
+    tip.className = 'tip-text' + (kind ? ' ' + kind : '');
+    $('btnMemoHint').disabled = !!memo.done;
+    $('btnMemoPass').disabled = !!memo.done || !currentMemoIsPass();
+    $('memoDone').classList.toggle('hidden', !memo.done);
+  }
+
+  // 对弈式：自动摆出对手的每一手，直到轮到我方（或超出区间）才停下等点击。
+  function advanceOpponent(initial) {
+    if (!memo) return;
+    while (!memo.done && memo.ply <= memo.to) {
+      var mv = memoMoveAt(memo.ply);
+      if (!mv) { memo.ply++; continue; }
+      if (mv.color === memo.color) break;
+      memo.pos.play(mv.color, SGF.sgfToXY(mv.sgf, memo.pos.size), mv.gtp);
+      memo.ply++;
+    }
+    if (memo.ply > memo.to) { finishMemo(); return; }
+    memoBoard.setPosition(memo.pos);
+    memoBoard.setMarks(memo.marks.concat(memo.hintMark ? [memo.hintMark] : []));
+    var isPass = currentMemoIsPass();
+    renderMemo(isPass
+      ? '第 ' + memo.ply + ' 手原谱是虚着（pass），点「本手 Pass」继续。'
+      : (initial
+          ? '已摆好前 ' + (memo.ply - 1) + ' 手。轮到你执' + (memo.color === 'B' ? '黑' : '白') + '，点出第 ' + memo.ply + ' 手。'
+          : '对手已应对，继续点出第 ' + memo.ply + ' 手。'),
+      initial ? '' : 'ok');
+    saveMemoProgress();
+  }
+
+  function finishMemo() {
+    memo.done = true;
+    memoBoard.setPosition(memo.pos);
+    memoBoard.setMarks([]);
+    $('memoProgressBar').style.width = '100%';
+    var myMoves = memo.master.moves.filter(function (mv) {
+      return mv.color === memo.color && mv.ply >= memo.from && mv.ply <= memo.to;
+    }).length;
+    renderMemo('已背完第 ' + memo.from + '–' + memo.to + ' 手，干得漂亮。', 'ok');
+    $('memoDone').innerHTML =
+      '<b>✓ 背谱完成</b><br>' +
+      '区间第 ' + memo.from + '–' + memo.to + ' 手 · 执' + (memo.color === 'B' ? '黑' : '白') +
+      ' 共下 <b>' + myMoves + '</b> 手<br>' +
+      '点错 <b>' + memo.mistakes + '</b> 次 · 提示 <b>' + memo.hints + '</b> 次' +
+      '<br><span style="font-size:11.5px;color:#5b7a68">仅作记录，不评级、不进 SRS。</span>' +
+      '<div class="btn-row tiny">' +
+        '<button class="btn primary" id="btnMemoAgain">再背一遍</button>' +
+        '<button class="btn ghost" id="btnMemoBack2">返回名局库</button>' +
+      '</div>';
+    $('btnMemoAgain').addEventListener('click', function () { startMemo(memo.master.id, true); });
+    $('btnMemoBack2').addEventListener('click', backFromMemo);
+    saveMemoProgress();
+    renderMemoList();
+  }
+
+  function startMemo(id, forceRestart) {
+    var m = Store.get().masters.filter(function (x) { return x.id === id; })[0];
+    if (!m) { toast('该名局已不存在'); return; }
+    var prm = memoParams(), N = m.moves.length;
+    if (prm.from > N) { toast('起手超过该局总手数（' + N + ' 手）'); return; }
+    var to = prm.to > 0 ? Math.min(N, prm.to) : N;
+    to = Math.max(prm.from, to);
+
+    var saved = forceRestart ? null : Store.getMasterProgress(id);
+    var reuse = saved && !saved.done && saved.color === prm.color &&
+      saved.from === prm.from && saved.to === to;
+    var ply = reuse ? Math.max(prm.from, Math.min(to, int(saved.ply, prm.from))) : prm.from;
+
+    var pos = new BM.Position(m.size || 19);
+    for (var i = 0; i < m.moves.length && m.moves[i].ply < ply; i++) {
+      var mv = m.moves[i];
+      pos.play(mv.color, SGF.sgfToXY(mv.sgf, pos.size), mv.gtp);
+    }
+
+    memo = {
+      master: m, color: prm.color, from: prm.from, to: to, N: N,
+      pos: pos, ply: ply,
+      mistakes: reuse ? (saved.mistakes || 0) : 0,
+      hints: reuse ? (saved.hints || 0) : 0,
+      learned: 0, done: false, marks: [], hintMark: null
+    };
+    mode = 'memo';
+    currentId = null;
+    renderStats();
+    showPanel('memoPanel');
+    memoBoard.interactive = true;
+    memoBoard.hoverEnabled = true;
+    memoBoard.hoverColor = prm.color;
+    memoBoard.onClick = onMemoBoardClick;
+    memoBoard.setPosition(pos);
+    memoBoard.setMarks([]);
+    saveMemoProgress();
+    toast('开始背谱：执' + (prm.color === 'B' ? '黑' : '白') + '，第 ' + prm.from + '–' + to + ' 手' +
+      (reuse ? '（从第 ' + ply + ' 手续背）' : ''));
+    advanceOpponent(true);
+  }
+
+  function onMemoBoardClick(x, y, gtp) {
+    if (mode !== 'memo' || !memo || memo.done) return;
+    if (occupiedAt(memo.pos, x, y)) { notifyOccupied(); return; }
+    var mv = memoMoveAt(memo.ply);
+    if (!mv || mv.color !== memo.color) return;
+    if (String(gtp).toUpperCase() === String(mv.gtp).toUpperCase()) {
+      memo.pos.play(mv.color, SGF.sgfToXY(mv.sgf, memo.pos.size), mv.gtp);
+      var xy = SGF.gtpToXY(mv.gtp, memo.pos.size);
+      memo.marks = xy ? [{ x: xy.x, y: xy.y, type: 'ok' }] : [];
+      memo.hintMark = null;
+      memo.ply++;
+      memo.learned++;
+      saveMemoProgress();
+      advanceOpponent(false);
+    } else {
+      // 停住重试：不重置进度，只累计点错次数
+      memo.mistakes++;
+      memoBoard.setMarks(memo.marks.concat([{ x: x, y: y, type: 'wrong' }],
+        memo.hintMark ? [memo.hintMark] : []));
+      renderMemo('不对，再想想 —— 仍停在第 ' + memo.ply + ' 手，不会重来。点「提示」可看落点。', 'bad');
+      saveMemoProgress();
+      var snapshot = memo;
+      setTimeout(function () {
+        if (mode === 'memo' && memo === snapshot && !memo.done) {
+          memoBoard.setMarks(memo.marks.concat(memo.hintMark ? [memo.hintMark] : []));
+        }
+      }, 800);
+    }
+  }
+
+  function memoHint() {
+    if (mode !== 'memo' || !memo || memo.done) return;
+    var mv = memoMoveAt(memo.ply);
+    if (!mv || mv.color !== memo.color) return;
+    memo.hints++;
+    if (SGF.isPassGtp(mv.gtp)) {
+      renderMemo('提示：第 ' + memo.ply + ' 手原谱是虚着（pass），点「本手 Pass」即可。', 'bad');
+    } else {
+      var xy = SGF.gtpToXY(mv.gtp, memo.pos.size);
+      memo.hintMark = xy ? { x: xy.x, y: xy.y, type: 'hint', label: '✓' } : null;
+      memoBoard.setMarks(memo.marks.concat(memo.hintMark ? [memo.hintMark] : []));
+      renderMemo('提示：第 ' + memo.ply + ' 手应下在标记处（' + esc(mv.gtp) +
+        '）；仍需自己点，提示单独计数、不算错。', 'bad');
+    }
+    saveMemoProgress();
+  }
+
+  function memoPass() {
+    if (mode !== 'memo' || !memo || memo.done || !currentMemoIsPass()) { toast('这一手不是虚着'); return; }
+    var mv = memoMoveAt(memo.ply);
+    memo.pos.play(mv.color, null, 'pass');
+    memo.marks = [];
+    memo.hintMark = null;
+    memo.ply++;
+    memo.learned++;
+    saveMemoProgress();
+    advanceOpponent(false);
+  }
+
+  function jumpToMemoCard() {
+    var c = $('memoCard');
+    if (!c) return;
+    if (c.scrollIntoView) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    c.style.boxShadow = '0 0 0 3px rgba(43,108,176,.35)';
+    setTimeout(function () { c.style.boxShadow = ''; }, 1500);
+  }
+
+  function backFromMemo() {
+    memo = null;
+    mode = 'idle';
+    renderStats();
+    showPanel('idlePanel');
+    updateIdle();
+    renderMemoList();
+    jumpToMemoCard();
   }
 
   /* ---------------- misc actions ---------------- */
@@ -750,8 +1111,24 @@
       importTexts([{ name: '粘贴棋谱-' + Date.now() + '.sgf', text: t }]);
     });
     $('btnClearGames').addEventListener('click', function () {
-      if (!confirm('确定清空所有已导入棋谱？复习进度会保留。')) return;
-      Store.setGames([]); refresh(); toast('已清空棋谱');
+      if (!confirm('确定清空所有已导入棋谱？复习进度与名局库会保留。')) return;
+      Store.setGames([]); refresh(); toast('已清空棋谱（名局库不受影响）');
+    });
+
+    // 名局背谱
+    $('btnMemoJump').addEventListener('click', jumpToMemoCard);
+    $('btnMemoAddSelected').addEventListener('click', memoAddSelected);
+    $('btnMemoAddFiles').addEventListener('click', function () { $('memoFileInput').click(); });
+    $('memoFileInput').addEventListener('change', function (e) {
+      memoAddFiles(e.target.files); e.target.value = '';
+    });
+    $('btnMemoHint').addEventListener('click', memoHint);
+    $('btnMemoPass').addEventListener('click', memoPass);
+    $('btnMemoBack').addEventListener('click', backFromMemo);
+    $('btnMemoRestart').addEventListener('click', function () {
+      if (!memo) return;
+      startMemo(memo.master.id, true);
+      toast('已从头开始背（点错与提示计数清零）');
     });
 
     // help
@@ -770,7 +1147,7 @@
         var f = inp.files[0];
         if (!f) return;
         f.text().then(function (t) {
-          try { Store.importBackup(t); loadSettingsToUI(); refresh(); toast('备份已恢复'); }
+          try { Store.importBackup(t); loadSettingsToUI(); refresh(); renderMemoList(); toast('备份已恢复'); }
           catch (e) { toast('备份恢复失败：' + e.message); }
         });
       });
@@ -829,12 +1206,18 @@
     }
     board = new BM.Board($('board'), 19);
     board.onClick = onBoardClick;
+    board.onOccupiedClick = notifyOccupied;
     previewBoard = new BM.Board($('previewBoard'), 19);
     previewBoard.interactive = false;
+    previewBoard.onOccupiedClick = notifyOccupied;
+    memoBoard = new BM.Board($('memoBoard'), 19);
+    memoBoard.onClick = onMemoBoardClick;
+    memoBoard.onOccupiedClick = notifyOccupied;
 
     loadSettingsToUI();
     bind();
     refresh();
+    renderMemoList();
 
     if (Store.get().memoryOnly) {
       $('importNote').className = 'import-note warn';

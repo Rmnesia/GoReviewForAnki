@@ -112,6 +112,12 @@ const STEP2 = '(async function(){' + HELPERS + `
        s0+' / '+$('mistakeInfo').textContent);
     window.__clickGtp(exp0);
     ok('点对后前进到第二步',$('stepInfo').textContent.indexOf('2 /')>=0,$('stepInfo').textContent);
+    // exp0 now holds a stone: clicking it must be ignored (no mistake, no progress change).
+    const m1=$('mistakeInfo').textContent,s1=$('stepInfo').textContent;
+    window.__clickGtp(exp0);
+    ok('点已有棋子不算错、不改进度',
+       $('mistakeInfo').textContent===m1&&$('stepInfo').textContent===s1,
+       s1+' / '+$('mistakeInfo').textContent);
     ok('AI 自动应手已摆在棋盘',true,$('tipText').textContent.trim());
   }catch(e){out.push({n:'EXCEPTION',ok:false,d:String(e.stack||e)});}
   return out;
@@ -181,8 +187,127 @@ const STEP5 = '(async function(){' + HELPERS + `
   return out;
 })()`;
 
+// 名局背谱：收录 -> 对弈式逐手 -> 停住重试 / 提示 -> 完成 -> 续背 -> 清空导入不丢 -> 改名 / 删除
+const STEP6 = '(async function(){' + HELPERS + `
+  try{
+    const st0=GoReview.Store.get();
+    const clean=st0.games.filter(g=>g.moves.length>=12&&g.moves.slice(0,8).every(m=>m.gtp!=='pass'));
+    const pick=clean[0]||st0.games.filter(g=>g.moves.length>=12)[0]||st0.games[0];
+    ok('存在可用于背谱的棋谱',!!pick,pick?pick.moves.length+' 手':'无');
+    $('memoSource').value=pick.filename;
+    $('btnMemoAddSelected').click();
+    await wait(()=>document.querySelectorAll('#memoList .memo-item').length>0,6000);
+    const masters=GoReview.Store.get().masters, m=masters[0];
+    ok('收录名局并独立持久化',masters.length===1&&m.moves.length===pick.moves.length,
+       masters.length+' 局 / '+m.moves.length+' 手');
+    ok('名局只存精简落子序列(无目差/PV)',
+       m.moves.every(x=>'ply' in x&&'color' in x&&'gtp' in x&&!('loss' in x)&&!('pv' in x)),
+       JSON.stringify(m.moves[0]));
+    const id=m.id;
+    $('memoColor').value='B'; $('memoFrom').value='1'; $('memoTo').value='8';
+    document.querySelector('#memoList [data-act=start]').click();
+    await wait(()=>!$('memoPanel').classList.contains('hidden'),6000);
+    ok('进入背谱面板',true,$('memoInfo').textContent.trim().replace(/\\s+/g,' ').slice(0,80));
+    const pg0=GoReview.Store.get().masterProgress[id];
+    ok('进度已初始化(区间1-8)',pg0&&pg0.from===1&&pg0.to===8&&!pg0.done,JSON.stringify(pg0));
+
+    function clickMemo(gtp){
+      const p=GoReview.SGF.gtpToXY(gtp,19); if(!p)return;
+      const c=$('memoBoard'),r=c.getBoundingClientRect(),w=c.clientWidth||560;
+      const pad=Math.max(20,Math.round(w*0.052)),s=(w-pad*2)/18;
+      c.dispatchEvent(new MouseEvent('click',{bubbles:true,
+        clientX:r.left+pad+p.x*s,clientY:r.top+pad+p.y*s}));
+    }
+    const p0=GoReview.Store.get().masterProgress[id].ply, mv0=m.moves[p0-1];
+    ok('初始停在我方待背的一手',mv0&&mv0.color==='B','ply '+p0+' / '+(mv0&&mv0.gtp));
+
+    const step0=$('memoStep').textContent,mis0=$('memoMistakes').textContent;
+    clickMemo('A19');
+    ok('点错停在当前手且累计错误',$('memoStep').textContent===step0&&$('memoMistakes').textContent!==mis0,
+       step0+' / '+$('memoMistakes').textContent);
+    const hint0=$('memoHints').textContent;
+    $('btnMemoHint').click();
+    ok('提示单独计数、只高亮不推进',$('memoHints').textContent!==hint0&&$('memoStep').textContent===step0,
+       $('memoHints').textContent+' / '+$('memoTip').textContent.trim().slice(0,36));
+
+    clickMemo(mv0.gtp);
+    await new Promise(r=>setTimeout(r,160));
+    const pAfter=GoReview.Store.get().masterProgress[id].ply;
+    ok('对手应手自动摆出并跳到我方下一手',pAfter>=p0+2,'ply '+p0+' -> '+pAfter);
+    window.__mid=id; window.__m=m; window.__clickMemo=clickMemo;
+  }catch(e){out.push({n:'EXCEPTION',ok:false,d:String(e.stack||e)});}
+  return out;
+})()`;
+
+const STEP7 = '(async function(){' + HELPERS + `
+  try{
+    const id=window.__mid, m=window.__m, clickMemo=window.__clickMemo;
+    for(let k=0;k<24;k++){
+      const pg=GoReview.Store.get().masterProgress[id];
+      if(pg.done||pg.ply>8)break;
+      const mv=m.moves[pg.ply-1];
+      if(mv&&mv.color==='B'){
+        if(!GoReview.SGF.gtpToXY(mv.gtp,19))$('btnMemoPass').click(); else clickMemo(mv.gtp);
+      }
+      await new Promise(r=>setTimeout(r,50));
+    }
+    await wait(()=>!$('memoDone').classList.contains('hidden'),6000);
+    const pg1=GoReview.Store.get().masterProgress[id], doneTxt=$('memoDone').textContent;
+    ok('背完区间后给出完成小结',pg1.done===true&&/背谱完成/.test(doneTxt),
+       doneTxt.replace(/\\s+/g,' ').trim().slice(0,90));
+    ok('小结含点错/提示且明确不评级、不进SRS',
+       /点错/.test(doneTxt)&&/提示/.test(doneTxt)&&/不评级、不进 SRS/.test(doneTxt)&&
+       !/下次复习|熟练度|ease/.test(doneTxt),'');
+    $('btnMemoBack2').click();
+    await wait(()=>!$('idlePanel').classList.contains('hidden'),4000);
+    ok('返回后列表标记已背完',/已背完/.test($('memoList').textContent),'');
+
+    window.confirm=()=>true;
+    $('btnClearGames').click();
+    ok('清空已导入棋谱不丢名局',
+       GoReview.Store.get().masters.length===1&&GoReview.Store.get().games.length===0,
+       '名局 '+GoReview.Store.get().masters.length+' 局 / 棋谱 '+GoReview.Store.get().games.length+' 局');
+
+    document.querySelector('#memoList [data-act=clear]').click();
+    $('memoColor').value='B'; $('memoFrom').value='1'; $('memoTo').value='8';
+    document.querySelector('#memoList [data-act=start]').click();
+    await wait(()=>!$('memoPanel').classList.contains('hidden'),6000);
+    const pb=GoReview.Store.get().masterProgress[id];
+    const cur=m.moves[pb.ply-1];
+    if(cur&&cur.color==='B')clickMemo(cur.gtp);
+    await new Promise(r=>setTimeout(r,160));
+    const pg2=GoReview.Store.get().masterProgress[id];
+    ok('中途进度已保存',pg2&&!pg2.done&&pg2.ply>1,'ply='+pg2.ply);
+    $('btnMemoBack').click();
+    await wait(()=>!$('idlePanel').classList.contains('hidden'),4000);
+    ok('列表出现「继续背」',/继续背/.test($('memoList').textContent),'');
+    document.querySelector('#memoList [data-act=start]').click();
+    await wait(()=>!$('memoPanel').classList.contains('hidden'),6000);
+    const pg3=GoReview.Store.get().masterProgress[id];
+    ok('续背从保存的手数继续',pg3.ply===pg2.ply,'ply '+pg2.ply+' -> '+pg3.ply);
+    $('btnMemoBack').click();
+    await wait(()=>!$('idlePanel').classList.contains('hidden'),4000);
+
+    const nameInp=document.querySelector('#memoList [data-act=name]');
+    nameInp.value='测试名局'; nameInp.dispatchEvent(new Event('change',{bubbles:true}));
+    ok('可直接改名称',GoReview.Store.get().masters[0].name==='测试名局',GoReview.Store.get().masters[0].name);
+    document.querySelector('#memoList [data-act=del]').click();
+    ok('可删除名局',GoReview.Store.get().masters.length===0,'剩余 '+GoReview.Store.get().masters.length+' 局');
+  }catch(e){out.push({n:'EXCEPTION',ok:false,d:String(e.stack||e)});}
+  return out;
+})()`;
+
 async function main() {
   fs.mkdirSync(SHOTS, { recursive: true });
+  // 「载入分析结果」用例需要 sgfout/ 里有数据；若目录为空，放一份演示 SGF 作固定夹具（结束清理）。
+  const outDir = path.join(__dirname, '..', 'sgfout');
+  const fixture = path.join(outDir, '__e2e_fixture.sgf');
+  fs.mkdirSync(outDir, { recursive: true });
+  if (!fs.readdirSync(outDir).some(function (f) { return /\.sgf$/i.test(f); })) {
+    const src = fs.readdirSync(path.join(__dirname, '..', 'sample'))
+      .filter(function (f) { return /\.sgf$/i.test(f); })[0];
+    if (src) fs.copyFileSync(path.join(__dirname, '..', 'sample', src), fixture);
+  }
   const server = await start(PORT);
   const profile = fs.mkdtempSync(path.join(require('os').tmpdir(), 'goreview-chrome-'));
   const chrome = spawn(CHROME, [
@@ -222,7 +347,8 @@ async function main() {
 
     const all = [];
     for (const [label, expr] of [['导入与筛选', STEP1], ['复习交互', STEP2],
-      ['评级与删除', STEP3], ['一键载入分析结果', STEP4], ['网页端 AI 分析', STEP5]]) {
+      ['评级与删除', STEP3], ['一键载入分析结果', STEP4], ['网页端 AI 分析', STEP5],
+      ['名局背谱·收录与逐手', STEP6], ['名局背谱·进度与管理', STEP7]]) {
       const rows = await evaluate(expr);
       console.log('\n== ' + label + ' ==');
       rows.forEach(function (r) { console.log('  ' + (r.ok ? 'PASS' : 'FAIL') + '  ' + r.n + (r.d ? '  [' + r.d + ']' : '')); });
@@ -232,6 +358,7 @@ async function main() {
       if (label === '评级与删除') console.log('  screenshot: ' + await screenshot('03-result.png'));
       if (label === '一键载入分析结果') console.log('  screenshot: ' + await screenshot('04-generated.png'));
       if (label === '网页端 AI 分析') console.log('  screenshot: ' + await screenshot('05-analysis.png'));
+      if (label === '名局背谱·收录与逐手') console.log('  screenshot: ' + await screenshot('06-memo.png'));
     }
     const failed = all.filter(function (r) { return !r.ok; }).length;
     console.log('\nBROWSER PASS ' + (all.length - failed) + '   FAIL ' + failed);
@@ -240,11 +367,11 @@ async function main() {
     try { ws && ws.close(); } catch (e) { /* ignore */ }
     try { chrome.kill(); } catch (e) { /* ignore */ }
     try { server.close(); } catch (e) { /* ignore */ }
-    // partial demo output (--limit) must not linger in sgfout/
+    // partial demo output (--limit) and the test fixture must not linger in sgfout/
     try {
-      const outDir = path.join(__dirname, '..', 'sgfout');
-      fs.readdirSync(outDir).filter(function (f) { return /\.part\d+\.sgf$/i.test(f); })
-        .forEach(function (f) { fs.unlinkSync(path.join(outDir, f)); });
+      fs.readdirSync(outDir).filter(function (f) {
+        return /\.part\d+\.sgf$/i.test(f) || f === '__e2e_fixture.sgf';
+      }).forEach(function (f) { fs.unlinkSync(path.join(outDir, f)); });
     } catch (e) { /* ignore */ }
     await sleep(200);
     try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) { /* ignore */ }

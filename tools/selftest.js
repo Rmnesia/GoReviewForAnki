@@ -260,6 +260,36 @@ async function main() {
   ok('CLI comment round-trips through parser', cmts.length === cliGame.moves.length + 1 &&
     SGF.parseComment(cmts[1]).pv.length >= 6, 'comments=' + cmts.length);
 
+  head('11. 名局库与背谱进度（独立于 SRS）');
+  const mrec = {
+    id: 'demo.sgf', name: '演示名局', filename: 'demo.sgf', size: 19,
+    pb: '', pw: '', blackId: 'A', whiteId: 'B',
+    moves: [
+      { ply: 1, color: 'B', sgf: 'dd', gtp: 'Q16' },
+      { ply: 2, color: 'W', sgf: 'pp', gtp: 'Q4' }
+    ],
+    note: '', addedAt: '2026-11-21T00:00:00.000Z'
+  };
+  ok('收录名局', Store.addMaster(mrec).added === true && Store.get().masters.length === 1);
+  Store.updateMaster(mrec.id, { name: '我改的名', note: '备注' });
+  const dup = Store.addMaster(Object.assign({}, mrec, {
+    name: '新名', moves: mrec.moves.concat([{ ply: 3, color: 'B', sgf: 'dq', gtp: 'D4' }])
+  }));
+  const m2 = Store.get().masters[0];
+  ok('重复收录只刷新落子、保留名称备注', !dup.added && m2.name === '我改的名' &&
+    m2.note === '备注' && m2.moves.length === 3, 'moves=' + m2.moves.length);
+  Store.setMasterProgress(mrec.id, { color: 'B', from: 1, to: 2, ply: 2, mistakes: 1, hints: 2, done: false });
+  ok('背谱进度读写', Store.getMasterProgress(mrec.id).ply === 2 &&
+    Store.getMasterProgress(mrec.id).hints === 2);
+  const mbk = Store.exportBackup();
+  ok('备份含名局与进度', JSON.parse(mbk).masters.length === 1 &&
+    JSON.parse(mbk).masterProgress[mrec.id].mistakes === 1);
+  Store.removeMaster(mrec.id);
+  ok('删除名局同时清进度', Store.get().masters.length === 0 && !Store.getMasterProgress(mrec.id));
+  Store.importBackup(mbk);
+  ok('备份恢复名局与进度', Store.get().masters.length === 1 &&
+    !!Store.getMasterProgress(mrec.id));
+
   console.log('\n----------------------------------------');
   console.log('PASS ' + pass + '   FAIL ' + fail);
   if (fail) process.exit(1);

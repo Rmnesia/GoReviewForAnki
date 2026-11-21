@@ -3,6 +3,8 @@ engine/
 cache/
 sgfout/
 tools/shots/
+# 个人对局棋谱默认不入库（如需自带 demo 可 git add -f）
+sgf/
 *.part*.sgf
 *.tmp
 

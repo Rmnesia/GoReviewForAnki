@@ -217,6 +217,29 @@ code{background:#eef2f7;border-radius:4px;padding:1px 5px;font-size:12px;color:#
 .tip-text.ok{border-left-color:var(--green);color:var(--green)}
 .tip-text.bad{border-left-color:var(--red);color:var(--red)}
 
+/* ---------- 名局背谱 ---------- */
+.memo-list{display:flex;flex-direction:column;gap:7px;max-height:300px;overflow:auto;margin-top:8px}
+.memo-item{border:1px solid var(--border);border-radius:7px;background:#f8fafc;padding:8px 9px}
+.memo-top{display:flex;align-items:center;gap:6px}
+.memo-name{
+  flex:1;min-width:0;border:1px solid transparent;background:transparent;border-radius:5px;
+  padding:3px 5px;font-size:12.5px;font-weight:650;color:var(--text);font-family:inherit;
+}
+.memo-name:hover{border-color:var(--border-strong);background:#fff}
+.memo-name:focus{border-color:var(--primary);background:#fff;outline:2px solid var(--primary-soft)}
+.memo-meta{font-size:11.3px;color:var(--text-3);margin:5px 0 7px;line-height:1.6;word-break:break-all}
+.memo-ops{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.memo-ops .btn{padding:4px 9px;font-size:11.5px}
+.memo-empty{font-size:12px;color:var(--text-3);padding:10px 4px;line-height:1.7}
+.pill.memo{background:#f0eafd;color:#7554b8}
+.memo-panel .board-shell canvas{cursor:crosshair}
+.memo-done{
+  margin-top:12px;background:#eff8f3;border:1px solid #c3e3d0;border-radius:8px;
+  padding:12px 14px;font-size:13px;color:#1f6b48;line-height:1.8;
+}
+.memo-done b{color:#14543a}
+.memo-done .btn-row{margin-top:10px}
+
 /* ---------- result ---------- */
 .result-panel{text-align:center;padding:62px 16px}
 .result-rating{display:inline-block;font-size:26px;font-weight:700;padding:8px 26px;border-radius:10px;margin-bottom:12px}

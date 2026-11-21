@@ -25,6 +25,8 @@
       cards: {},
       deletedIds: [],
       stats: { totalReviews: 0, day: '', dayReviews: 0 },
+      masters: [],          // 名局库（独立持久化，不随已导入棋谱清空）
+      masterProgress: {},   // { [masterId]: { color, from, to, ply, mistakes, hints, done } }
       memoryOnly: false
     };
   }
@@ -37,6 +39,8 @@
     d.games = Array.isArray(s.games) ? s.games : [];
     d.cards = (s.cards && typeof s.cards === 'object') ? s.cards : {};
     d.deletedIds = Array.isArray(s.deletedIds) ? s.deletedIds : [];
+    d.masters = Array.isArray(s.masters) ? s.masters : [];
+    d.masterProgress = (s.masterProgress && typeof s.masterProgress === 'object') ? s.masterProgress : {};
     d.stats = Object.assign(d.stats, s.stats || {});
     d.settings = Object.assign(d.settings, s.settings || {});
     d.settings.thresholds = Object.assign({ opening: 2, middle: 5, endgame: 3 }, (s.settings || {}).thresholds || {});
@@ -115,12 +119,61 @@
     save();
   }
 
+  /* ---------------- 名局库 / 背谱进度 ---------------- */
+
+  function addMaster(m) {
+    var s = load(), idx = -1;
+    for (var i = 0; i < s.masters.length; i++) if (s.masters[i].id === m.id) { idx = i; break; }
+    if (idx >= 0) {
+      // 重复收录：只刷新棋谱内容，保留用户改过的名称、备注与背谱进度
+      var old = s.masters[idx];
+      s.masters[idx] = Object.assign({}, m, {
+        name: old.name, note: old.note, addedAt: old.addedAt
+      });
+      save();
+      return { added: false, master: s.masters[idx] };
+    }
+    s.masters.push(m);
+    save();
+    return { added: true, master: m };
+  }
+
+  function updateMaster(id, patch) {
+    var s = load();
+    for (var i = 0; i < s.masters.length; i++) {
+      if (s.masters[i].id === id) { Object.assign(s.masters[i], patch); save(); return s.masters[i]; }
+    }
+    return null;
+  }
+
+  function removeMaster(id) {
+    var s = load();
+    s.masters = s.masters.filter(function (m) { return m.id !== id; });
+    delete s.masterProgress[id];
+    save();
+  }
+
+  function getMasterProgress(id) { return load().masterProgress[id] || null; }
+
+  function setMasterProgress(id, prog) {
+    var s = load();
+    s.masterProgress[id] = prog;
+    save();
+  }
+
+  function clearMasterProgress(id) {
+    var s = load();
+    delete s.masterProgress[id];
+    save();
+  }
+
   function exportBackup() {
     var s = load();
     return JSON.stringify({
       version: 1, exportedAt: new Date().toISOString(),
       settings: s.settings, games: s.games, cards: s.cards,
-      deletedIds: s.deletedIds, stats: s.stats
+      deletedIds: s.deletedIds, stats: s.stats,
+      masters: s.masters, masterProgress: s.masterProgress
     }, null, 2);
   }
 
@@ -132,6 +185,8 @@
     if (Array.isArray(obj.games)) s.games = obj.games;
     if (obj.cards && typeof obj.cards === 'object') s.cards = obj.cards;
     if (Array.isArray(obj.deletedIds)) s.deletedIds = obj.deletedIds;
+    if (Array.isArray(obj.masters)) s.masters = obj.masters;
+    if (obj.masterProgress && typeof obj.masterProgress === 'object') s.masterProgress = obj.masterProgress;
     if (obj.stats) s.stats = Object.assign(s.stats, obj.stats);
     save();
     return s;
@@ -148,7 +203,11 @@
     load: load, get: get, save: save, setSettings: setSettings,
     setGames: setGames, getCard: getCard, setCard: setCard,
     deleteCard: deleteCard, restoreCard: restoreCard,
-    bumpReview: bumpReview, exportBackup: exportBackup,
+    bumpReview: bumpReview,
+    addMaster: addMaster, updateMaster: updateMaster, removeMaster: removeMaster,
+    getMasterProgress: getMasterProgress, setMasterProgress: setMasterProgress,
+    clearMasterProgress: clearMasterProgress,
+    exportBackup: exportBackup,
     importBackup: importBackup, resetAll: resetAll
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
